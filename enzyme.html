@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enzyme Terminal - HALO Language Engine</title>
+    <style>
+        :root {
+            --bg-color: #050d06;
+            --text-color: #38ee5a;
+            --prompt-color: #a2ffa2;
+            --error-color: #ff3333;
+            --window-border: #144e1b;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 0;
+            font-family: 'Consolas', 'Courier New', monospace;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+        }
+
+        .terminal-window {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .title-bar {
+            background-color: #0a140b;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            border-bottom: 2px solid var(--window-border);
+            user-select: none;
+            z-index: 10;
+        }
+
+        .tab {
+            color: var(--prompt-color);
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1.5px;
+        }
+
+        .terminal-body {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            color: var(--text-color);
+            font-size: 15px;
+            line-height: 1.6;
+            text-shadow: 0 0 4px rgba(56, 238, 90, 0.4);
+            z-index: 10;
+        }
+
+        .output-line {
+            margin-bottom: 8px;
+            white-space: pre-wrap;
+        }
+
+        .error { color: var(--error-color) !important; text-shadow: 0 0 4px rgba(255, 51, 51, 0.4) !important; }
+        .success { color: #ffffff !important; text-shadow: 0 0 6px var(--text-color) !important; font-weight: bold; }
+        .system { opacity: 0.8; }
+
+        .input-line {
+            display: flex;
+            align-items: center;
+            margin-top: 12px;
+        }
+
+        .prompt {
+            color: var(--prompt-color);
+            margin-right: 12px;
+            white-space: nowrap;
+            font-weight: bold;
+        }
+
+        #cmd-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #ffffff;
+            font-family: inherit;
+            font-size: 15px;
+            outline: none;
+            padding: 0;
+            text-shadow: 0 0 4px rgba(255, 255, 255, 0.6);
+        }
+    </style>
+</head>
+<body>
+
+<div class="terminal-window">
+    <div class="title-bar">
+        <div class="tab">ENZYME_TERM // HALO_RUNTIME_v13.10</div>
+    </div>
+    <div class="terminal-body" id="terminal-body" onclick="document.getElementById('cmd-input').focus()">
+        
+        <div class="input-line">
+            <span class="prompt" id="prompt-label">@halo:~#</span>
+            <input type="text" id="cmd-input" autofocus autocomplete="off" spellcheck="false">
+        </div>
+    </div>
+</div>
+
+<script>
+    const variables = {};
+    const commandHistory = [];
+    let variableHistoryState = [];
+    const installedPackages = new Set();
+
+    // ION Remote Package Matrix
+    const ionRepository = {
+        "wall-street": { version: "1.0.0", desc: "Hyper-fast asset trading engine simulator. Unlocks: 'market', 'buy', 'sell'", unlockedCmds: ["market", "buy", "sell"] },
+        "wire-cutter": { version: "1.0.5", desc: "Tense 5-second structural countdown wire defusal simulator. Unlocks: 'defuse', 'cut'", unlockedCmds: ["defuse", "cut"] },
+        "v-disk": { version: "3.1.0", desc: "Persistent system file storage structures. Unlocks: 'write', 'ls', 'cat'", unlockedCmds: ["write", "ls", "cat"] },
+        "halo-flow": { version: "2.2.0", desc: "Automation macro loop engine parser. Unlocks: 'record', 'stop', 'run'", unlockedCmds: ["record", "stop", "run"] },
+        "alias-core": { version: "1.5.0", desc: "Custom macro shortcut dictionary mapping core. Unlocks: 'alias'", unlockedCmds: ["alias"] },
+        "env-vault": { version: "2.0.1", desc: "Global layout and profile variable manager. Unlocks: 'set', 'env'", unlockedCmds: ["set", "env"] },
+        "history-log": { version: "1.1.0", desc: "Advanced log filters and state recovery. Unlocks: 'history search', 'undo'", unlockedCmds: ["history", "undo"] },
+        "integrity-check": { version: "1.0.0", desc: "Security check algorithm for checking file storage state. Unlocks: 'hash'", unlockedCmds: ["hash"] },
+        "alias-export": { version: "2.0.0", desc: "Configuration backup utility. Unlocks: 'export', 'import'", unlockedCmds: ["export", "import"] }
+    };
+
+    // System States
+    let marketState = { active: false, cash: 100, shares: 0, stockPrice: 20 };
+    let bombState = { active: false, targetWire: "", remainingWires: [], stepsLeft: 2 };
+    let virtualDisk = {};
+    let scriptAutomation = { recording: false, activeScriptName: "", commandsArray: [], savedScripts: {} };
+    let aliasMap = {};
+    let envVariables = { USER: "halo", COLOR: "#38ee5a" };
+
+    const jokesDatabase = [
+        "Why do programmers wear glasses? Because they can't C#.",
+        "There are 10 types of people in the world: those who understand binary, and those who don't."
+    ];
+
+    function captureStateSnapshot() {
+        variableHistoryState.push(JSON.stringify(variables));
+        if (variableHistoryState.length > 20) variableHistoryState.shift();
+    }
+
+    function runHALO(input) {
+        const parts = input.trim().split(/\s+/);
+        const command = parts[0].toLowerCase();
+
+        switch(command) {
+            case 'let':
+                if (parts[2] !== '=') return `<span class="error">HALO Compilation Error: Expected token '='</span>`;
+                captureStateSnapshot();
+                const varName = parts[1];
+                const varVal = parts.slice(3).join(' ');
+                variables[varName] = isNaN(varVal) ? varVal : Number(varVal);
+                return `HALO Memory Block Mapped: ${varName} = ${variables[varName]}`;
+
+            case 'print':
+                const target = parts.slice(1).join(' ');
+                if (variables[target] !== undefined) return `<span class="success">${variables[target]}</span>`;
+                return `<span>${target}</span>`;
+
+            case 'calc':
+                if (parts.length < 4) return `<span class="error">HALO Arithmetic Error: Operations require 3 parameters.</span>`;
+                let val1 = variables[parts[1]] !== undefined ? variables[parts[1]] : Number(parts[1]);
+                let op = parts[2].toLowerCase();
+                let val2 = variables[parts[3]] !== undefined ? variables[parts[3]] : Number(parts[3]);
+                if (isNaN(val1) || isNaN(val2)) return `<span class="error">HALO Runtime Exception: Invalid parameters.</span>`;
+
+                captureStateSnapshot();
+                let result = 0;
+                if (op === '+' || op === 'add') result = val1 + val2;
+                else if (op === '-' || op === 'sub') result = val1 - val2;
+                else if (op === '*' || op === 'x' || op === 'mult') result = val1 * val2;
+                else if (op === '/' || op === 'div') {
+                    if (val2 === 0) return `<span class="error">HALO Critical Error: Division by zero.</span>`;
+                    result = val1 / val2;
+                } else return `<span class="error">HALO Syntax Error: Unsupported operator token.</span>`;
+
+                variables['ans'] = result;
+                return `<span class="success">${result}</span>`;
+
+            default:
+                return null; 
+        }
+    }
+
+    const terminalBody = document.getElementById('terminal-body');
+    const cmdInput = document.getElementById('cmd-input');
+    const promptLabel = document.getElementById('prompt-label');
+
+    cmdInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            let rawInput = cmdInput.value;
+            
+            if (rawInput.trim() === '' && marketState.active) {
+                cmdInput.value = ''; advanceMarketTick(); return;
+            }
+            if (rawInput.trim() === '') return;
+
+            // Alias Shortcut Interceptor
+            const initialTokens = rawInput.trim().split(/\s+/);
+            const primaryToken = initialTokens[0].toLowerCase();
+            if (aliasMap[primaryToken] && !scriptAutomation.recording) {
+                const commandRemainder = initialTokens.slice(1).join(' ');
+                rawInput = aliasMap[primaryToken] + (commandRemainder ? ' ' + commandRemainder : '');
+            }
+
+            // Script Recorder Interceptor
+            if (scriptAutomation.recording && rawInput.trim().toLowerCase() !== 'stop') {
+                scriptAutomation.commandsArray.push(rawInput);
+                printLine(`<span style="color:#ffaa00;">[REC] @${envVariables.USER}:#</span> ${rawInput}`);
+                cmdInput.value = ''; return;
+            }
+
+            commandHistory.push(rawInput);
+            printLine(`<span class="prompt">${promptLabel.innerText}</span> ${rawInput}`);
+            cmdInput.value = '';
+            
+            processCommand(rawInput);
+        }
+    });
+
+    function printLine(htmlText) {
+        const newLine = document.createElement('div');
+        newLine.className = 'output-line';
+        newLine.innerHTML = htmlText;
+        const inputLine = document.querySelector('.input-line');
+        terminalBody.insertBefore(newLine, inputLine);
+        terminalBody.scrollTop = terminalBody.scrollHeight;
+    }
+
+    function updatePromptDisplay() {
+        if (scriptAutomation.recording) return;
+        promptLabel.innerText = `@${envVariables.USER}:~#`;
+    }
+
+    function advanceMarketTick() {
+        const changePercent = (Math.random() * 0.5) - 0.23;
+        marketState.stockPrice = Math.max(2, Math.round(marketState.stockPrice * (1 + changePercent)));
+        printLine(`<span>Portfolio: Cash: <span class="success">$${marketState.cash}</span> | Shares: ${marketState.shares} | Price: <span style="color:#fff; font-weight:bold;">$${marketState.stockPrice}</span></span>`);
+    }
+
+    function processCommand(input) {
+        const parts = input.trim().split(/\s+/);
+        const cleanInput = parts[0].toLowerCase();
+
+        if (cleanInput === 'clear' || cleanInput === 'cls') {
+            const lines = document.querySelectorAll('.output-line');
+            lines.forEach(line => line.remove()); return;
+        }
+        if (cleanInput === 'time') {
+            const now = new Date(); printLine(`<span class="system">${now.toLocaleDateString()} @ ${now.toLocaleTimeString()}</span>`); return;
+        }
+        if (cleanInput === 'whoami') {
+            printLine(`<span class="success">Pranav Siddharth Stalin</span>`); return;
+        }
+        if (cleanInput === 'joke') {
+            const randomIndex = Math.floor(Math.random() * jokesDatabase.length); printLine(`<span>${jokesDatabase[randomIndex]}</span>`); return;
+        }
+        if (cleanInput === 'halo') {
+            printLine(`<span>HALO Language Engine Version: <span class="success">13.10</span></span>`); return;
+        }
+
+        // --- CORE EXIT IMPLEMENTATION ---
+        if (cleanInput === 'exit') {
+            printLine(`<span class="error">ION Engine shutting down... Closing connection terminal node layout.</span>`);
+            setTimeout(() => {
+                window.close();
+                // Safe browser alternative if window.close() is blocked by security context
+                document.body.innerHTML = `<div style="color:#ff3333; font-family:monospace; padding:40px; font-size:20px; text-align:center;">TERMINAL INSTANCE TERMINATED // SESSION CLOSED CLEANLY</div>`;
+            }, 600);
+            return;
+        }
+
+        // --- NEW SIMPLIFIED PACK MANAGER ('ion' BY ITSELF PRINTS INDEX) ---
+        if (cleanInput === 'ion') {
+            const subAction = parts[1]?.toLowerCase();
+
+            if (!subAction) {
+                let listBuffer = `<strong>IMPOSSIBLE OPTICAL NETWORK PACKAGE INDEX:</strong><br>`;
+                for (let pkg in ionRepository) {
+                    const isInstalled = installedPackages.has(pkg) ? `<span class="success">[LOADED]</span>` : `<span style="color:#666;">[REMOTE]</span>`;
+                    listBuffer += `  ${isInstalled} <strong>${pkg}</strong> (v${ionRepository[pkg].version})<br>  <span style="opacity:0.7;">- ${ionRepository[pkg].desc}</span><br>`;
+                }
+                printLine(listBuffer.trim());
+            } 
+            else if (subAction === 'install') {
+                const targetPkg = parts[2];
+                if (!targetPkg || !ionRepository[targetPkg]) { printLine(`<span class="error">Payload address non-existent.</span>`); return; }
+                if (installedPackages.has(targetPkg)) { printLine(`<span>Module '${targetPkg}' already active.</span>`); return; }
+                printLine(`<span class="system">ION: Connecting to optical node channels...</span>`);
+                setTimeout(() => {
+                    installedPackages.add(targetPkg);
+                    printLine(`<span class="success">ION Infiltration Success: Commands for '${targetPkg}' are active.</span>`);
+                }, 600);
+            } else {
+                printLine(`<span class="error">ION Utility Syntax: Type 'ion' to view or 'ion install [package]' to load.</span>`);
+            }
+            return;
+        }
+
+        // --- ADVANCED HISTORY-LOG ENGINE ---
+        if (cleanInput === 'history') {
+            if (parts[1]?.toLowerCase() === 'search') {
+                if (!installedPackages.has('history-log')) { printLine(`<span class="error">Install 'history-log' via ION first.</span>`); return; }
+                const query = parts.slice(2).join(' ').toLowerCase();
+                if (!query) { printLine(`<span class="error">Syntax: history search [keyword]</span>`); return; }
+                let searchBuffer = `<strong>HISTORY QUERIES MATCHING '${query.toUpperCase()}':</strong><br>`;
+                let matches = commandHistory.filter(cmd => cmd.toLowerCase().includes(query));
+                if (matches.length === 0) { printLine(`<span style="color:#666;">No matches found.</span>`); return; }
+                matches.forEach((cmd, idx) => { searchBuffer += `  <span style="color:#666;">${idx+1}</span> ${cmd}<br>`; });
+                printLine(searchBuffer.trim());
+                return;
+            }
+            if (commandHistory.length === 0) return;
+            let histOut = '';
+            commandHistory.forEach((cmd, idx) => { histOut += `<span style="color:#666;">${idx+1}</span> ${cmd}<br>`; });
+            printLine(histOut.trim());
+            return;
+        }
+
+        if (cleanInput === 'undo') {
+            if (!installedPackages.has('history-log')) { printLine(`<span class="error">Install 'history-log' via ION first.</span>`); return; }
+            if (variableHistoryState.length === 0) { printLine(`<span style="color:#666;">No previous environment states found. Reversion impossible.</span>`); return; }
+            const previousState = JSON.parse(variableHistoryState.pop());
+            for (let member in variables) delete variables[member];
+            Object.assign(variables, previousState);
+            printLine(`<span>State Restored: Environment variables reverted back 1 operational frame.</span>`);
+            return;
+        }
+
+        // --- INTEGRITY FILE SECURITY CHECK ---
+        if (cleanInput === 'hash') {
+            if (!installedPackages.has('integrity-check')) { printLine(`<span class="error">Install 'integrity-check' via ION first.</span>`); return; }
+            const fileTarget = parts[1];
+            if (!fileTarget || !virtualDisk[fileTarget]) { printLine(`<span class="error">File Exception: Target path '${fileTarget}' unmapped on drive.</span>`); return; }
+            let str = virtualDisk[fileTarget].content; let val = 0;
+            for (let i = 0; i < str.length; i++) val = (val << 5) - val + str.charCodeAt(i);
+            const hexResult = "F9_" + Math.abs(val).toString(16).toUpperCase().substring(0, 8);
+            printLine(`<span>File Layout Metadata Checksum (${fileTarget}):<br>  Fingerprint -> <span class="success">${hexResult}</span> <span style="color:#666;">(Clean Data Frame OK)</span></span>`);
+            return;
+        }
+
+        // --- ALIAS PORTABILITY SYSTEM ---
+        if (cleanInput === 'export') {
+            if (!installedPackages.has('alias-export')) { printLine(`<span class="error">Install 'alias-export' via ION first.</span>`); return; }
+            const backupObject = { aliases: aliasMap, profile: envVariables };
+            const serializedStr = btoa(JSON.stringify(backupObject));
+            printLine(`<span><strong>CONFIGURATION EXPORT PAYLOAD COMPILED:</strong><br><span style="color:#666; word-wrap: break-word;">${serializedStr}</span><br><br><span class="success">Copy this block structure string. You can load it later via the 'import' tool.</span></span>`);
+            return;
+        }
+
+        if (cleanInput === 'import') {
+            if (!installedPackages.has('alias-export')) { printLine(`<span class="error">Install 'alias-export' via ION first.</span>`); return; }
+            const payloadStr = parts[1]; if (!payloadStr) return;
+            try {
+                const parsedConfig = JSON.parse(atob(payloadStr));
+                if (parsedConfig.aliases) aliasMap = parsedConfig.aliases;
+                if (parsedConfig.profile) { envVariables = parsedConfig.profile; updatePromptDisplay(); }
+                printLine(`<span class="success">Profile Restored! Custom shortcuts and profile keys loaded successfully.</span>`);
+            } catch(err) {
+                printLine(`<span class="error">Import Halted: Profile package corrupted or invalid parsing layout.</span>`);
+            }
+            return;
+        }
+
+        // --- ALIAS-CORE ROUTINE ---
+        if (cleanInput === 'alias') {
+            if (!installedPackages.has('alias-core')) { printLine(`<span class="error">Install 'alias-core' via ION first.</span>`); return; }
+            const equalsIndex = parts.indexOf('=');
+            if (parts.length < 4 || equalsIndex === -1 || equalsIndex !== 2) {
+                printLine(`<span class="error">Alias Syntax Error: Use 'alias [shortcut] = [full command]'</span>`); return;
+            }
+            const shortcutKey = parts[1].toLowerCase(); const expandedCommand = parts.slice(3).join(' ');
+            aliasMap[shortcutKey] = expandedCommand;
+            printLine(`<span>Shortcut Mapped: <span class="success">'${shortcutKey}'</span> executes <span style="color:#fff;">'${expandedCommand}'</span></span>`);
+            return;
+        }
+
+        // --- ENV-VAULT ROUTINE ---
+        if (cleanInput === 'set') {
+            if (!installedPackages.has('env-vault')) { printLine(`<span class="error">Install 'env-vault' via ION first.</span>`); return; }
+            const targetKey = parts[1]?.toUpperCase(); const targetValue = parts.slice(2).join(' ');
+            if (!targetKey || !targetValue) { printLine(`<span class="error">Vault Syntax Error: Use 'set [KEY] [VALUE]'</span>`); return; }
+            if (targetKey === 'USER') {
+                envVariables.USER = targetValue; updatePromptDisplay();
+                printLine(`<span>User mapping altered to <span class="success">${targetValue}</span></span>`);
+            } else if (targetKey === 'COLOR') {
+                envVariables.COLOR = targetValue; document.documentElement.style.setProperty('--text-color', targetValue);
+                printLine(`<span>System Layout: Glow hue updated.</span>`);
+            } else {
+                envVariables[targetKey] = targetValue; printLine(`<span>Custom Key Loaded: ${targetKey} = ${targetValue}</span>`);
+            }
+            return;
+        }
+
+        if (cleanInput === 'env') {
+            printLine(`<strong>ENVIRONMENT VAULT KEYS:</strong><br>` + JSON.stringify(envVariables, null, 2) + `<br><strong>VARIABLE MEMORY RECON:</strong><br>` + JSON.stringify(variables, null, 2));
+            return;
+        }
+
+        // --- STORAGE PACKAGE: V-DISK ---
+        if (cleanInput === 'write') {
+            if (!installedPackages.has('v-disk')) return;
+            const filename = parts[1]; let payload = parts.slice(2).join(' ');
+            if (!filename || !payload) return;
+            if (payload.toLowerCase() === 'ans') payload = variables['ans'] !== undefined ? String(variables['ans']) : "undefined";
+            virtualDisk[filename] = { content: payload, size: payload.length };
+            printLine(`<span>Written <span class="success">${filename}</span> [${payload.length} bytes] to disk.</span>`); return;
+        }
+        if (cleanInput === 'ls') {
+            if (!installedPackages.has('v-disk')) return;
+            const keys = Object.keys(virtualDisk);
+            if (keys.length === 0) { printLine(`<span style="color:#666;">No files detected on local storage disk blocks.</span>`); return; }
+            let lsBuffer = `<strong>STORAGE FILE CLUSTERS:</strong><br>`;
+            keys.forEach(file => { lsBuffer += `  <span style="color:#ffffff;">${file}</span> <span style="color:#666;">[${virtualDisk[file].size} bytes]</span><br>`; });
+            printLine(lsBuffer.trim()); return;
+        }
+        if (cleanInput === 'cat') {
+            if (!installedPackages.has('v-disk')) return;
+            const filename = parts[1];
+            if (!filename || !virtualDisk[filename]) { printLine(`<span class="error">File path not found.</span>`); return; }
+            printLine(`<span>File Output (${filename}): <span class="success">${virtualDisk[filename].content}</span></span>`); return;
+        }
+
+        // --- AUTOMATION PACKAGE: HALO-FLOW ---
+        if (cleanInput === 'record') {
+            if (!installedPackages.has('halo-flow')) return;
+            const scriptName = parts[1]; if (!scriptName) return;
+            scriptAutomation.recording = true; scriptAutomation.activeScriptName = scriptName.toLowerCase(); scriptAutomation.commandsArray = [];
+            promptLabel.innerText = "[RECORDING]#"; promptLabel.style.color = "#ffaa00"; return;
+        }
+        if (cleanInput === 'stop') {
+            if (!scriptAutomation.recording) return;
+            scriptAutomation.recording = false; scriptAutomation.savedScripts[scriptAutomation.activeScriptName] = [...scriptAutomation.commandsArray];
+            promptLabel.style.color = "var(--prompt-color)"; updatePromptDisplay();
+            printLine(`<span class="success">[MACRO SAVED] Compiled script pipeline '${scriptAutomation.activeScriptName}'.</span>`); return;
+        }
+        if (cleanInput === 'run') {
+            if (!installedPackages.has('halo-flow')) return;
+            const scriptName = parts[1]?.toLowerCase();
+            if (!scriptName || !scriptAutomation.savedScripts[scriptName]) { printLine(`<span class="error">Script trace unmapped.</span>`); return; }
+            printLine(`<span style="color:#666;">[Script block execution fired]</span>`);
+            scriptAutomation.savedScripts[scriptName].forEach(cmd => processCommand(cmd)); return;
+        }
+
+        // Mini-game triggers
+        if (cleanInput === 'market') { if (!installedPackages.has('wall-street')) return; marketState.active = true; advanceMarketTick(); return; }
+        if (cleanInput === 'buy') { if (!marketState.active) return; marketState.cash -= marketState.stockPrice; marketState.shares += 1; advanceMarketTick(); return; }
+        if (cleanInput === 'sell') { if (!marketState.active || marketState.shares <= 0) return; marketState.shares -= 1; marketState.cash += marketState.stockPrice; variables['ans'] = marketState.cash; advanceMarketTick(); return; }
+        if (cleanInput === 'defuse') { if (!installedPackages.has('wire-cutter')) return; bombState.active = true; bombState.remainingWires = ["red", "blue", "green", "yellow"]; bombState.targetWire = "blue"; bombState.stepsLeft = 2; printLine(`<strong>[DEFUSE PROTOCOL]</strong> Cut a wire color...`); return; }
+
+        if (cleanInput === 'help') {
+            printLine(`<strong>AVAILABLE CORE COMMAND KERNEL LOGIC:</strong><br>
+  clear / cls       - Clears active layout lines from the screen.<br>
+  time              - Prints system date and clock tracking metrics.<br>
+  whoami            - Displays system identity matrix.<br>
+  halo              - Shows active compiler engine build architecture specifications.<br>
+  ion               - Accesses the remote package asset download channels index.<br>
+  ion install [pkg] - Infiltrates network nodes to download code updates.<br>
+  exit              - Standard session termination macro sequence.<br>
+  let [var] = [val] - Commits a variable directly to volatile RAM stack.<br>
+  print [var/text]  - Outputs specified values directly to terminal.<br>
+  calc [a] [op] [b] - Runs math operations (+, -, *, /) and outputs results.<br><br>
+<strong>UNLOCKED PACKAGE EXTENSION MATRIX:</strong><br>
+  [v-disk]          - write [file] [text] | ls | cat [file]<br>
+  [halo-flow]       - record [script] | stop | run [script]<br>
+  [alias-core]      - alias [shortcut] = [full command expression]<br>
+  [env-vault]       - set [USER/COLOR] [value] | env<br>
+  [history-log]     - history search [keyword] | undo<br>
+  [integrity-check] - hash [filename]<br>
+  [alias-export]    - export | import [string_payload]`);
+            return;
+        }
+
+        const langResult = runHALO(input);
+        if (langResult !== null) printLine(langResult);
+        else printLine(`<span class="error">Instruction '${input}' not mapped or recognized. Type 'help' for directory path.</span>`);
+    }
+</script>
+
+</body>
+</html>
